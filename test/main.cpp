@@ -17,10 +17,10 @@ void heavy(std::function<void()> f, int x) {
 
 template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
   using TT = typename std::remove_const<typename std::remove_reference<T>::type>::type;
-  return Promise<>::create<TT>([&](auto resolver) {
+  return Promise<>::create<TT>([&value, delay](auto resolver) {
     if(delay == 0) resolver.resolve(std::forward<T>(value));
     else{
-      heavy([=]() {
+      heavy([resolver, value]() {
         resolver.resolve(std::move(value));
       }, delay);
     }
@@ -30,10 +30,10 @@ template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
 struct test_error : std::exception {};
 
 template <typename T> typename Promise<T>::sp perror(int delay = 0) {
-    return Promise<>::create<T>([=](auto resolver)  {
+  return Promise<>::create<T>([delay](auto resolver)  {
     if(delay == 0) resolver.reject(std::make_exception_ptr(test_error{}));
     else{
-      heavy([=]() {
+      heavy([resolver]() {
         resolver.reject(std::make_exception_ptr(test_error{}));
       }, delay);
     }
@@ -134,25 +134,61 @@ void test_4() {
 void test_5() {
   {
     log() << "#1 start" << std::endl;
-    pvalue(1, 1000)
+    auto p = pvalue<std::string>("#1 - a", 1000)
     ->then([](const auto& x){
       log() << x << std::endl;
-    });
-    log() << "#1 end" << std::endl;
-  }
-
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-  log() << "wait 1sec" << std::endl;
-
-  {
-    log() << "#2 start" << std::endl;
-    std::condition_variable cond;
-    pvalue(1, 1000)
+      return pvalue(x + "b", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "c", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "d", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "e", 1000);
+    })
     ->then([](const auto& x){
       log() << x << std::endl;
     })
     ->finally([&](){
-      log() << "finally" << std::endl;
+      log() << "#1 finally" << std::endl;
+    });
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    log() << "wait 2sec" << std::endl;
+
+    log() << "#1 end" << std::endl;
+  }
+
+  {
+    log() << "#2 start" << std::endl;
+    std::condition_variable cond;
+    auto p = pvalue<std::string>("#2 - a", 1000)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "b", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "c", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "d", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "e", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    })
+    ->finally([&](){
+      log() << "#2 finally" << std::endl;
       cond.notify_one();
     });
     std::mutex mtx;
