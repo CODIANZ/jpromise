@@ -1,7 +1,7 @@
 #include <iostream>
-#include <jpromise/promise2.h>
+#include <jpromise/promise.h>
 
-using namespace JPromise2;
+using namespace JPromise;
 
 std::ostream& log() {
   return std::cout << std::this_thread::get_id() << " : ";
