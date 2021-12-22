@@ -55,13 +55,17 @@ private:
   using ulock       = std::unique_lock<mtx>;
 
 public:
-  struct resolver {
-    sp p_;
+  /** treat as mutable for use in lambda functions */
+  class resolver {
+  friend class Promise<T>;
+  private:
+    mutable sp p_;
     resolver(sp p) : p_(p) {}
-    template <typename U> void resolve(U&& value){
+  public:
+    template <typename U> void resolve(U&& value) const {
       p_->on_fulfilled(std::forward<U>(value));
     }
-    void reject(std::exception_ptr err){
+    void reject(std::exception_ptr err) const {
       p_->on_rejected(err);
     }
   };
@@ -137,7 +141,7 @@ private:
       state_ = state::fulfilled;
       value_ = std::forward<U>(value);
     }
-    /** 以降はhandlerはロック不要 */
+    /** no lock required from here */
     while(!fulfilled_handlers_.empty()){
       fulfilled_handlers_.front()(value_);
       fulfilled_handlers_.pop();
@@ -155,7 +159,7 @@ private:
       state_ = state::rejected;
       error_ = err;
     }
-    /** 以降はhandlerはロック不要 */
+    /** no lock required from here */
     while(!rejected_handlers_.empty()){
       rejected_handlers_.front()(error_);
       rejected_handlers_.pop();
@@ -182,14 +186,14 @@ public:
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver){
       THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value){
         func(value)
-        ->then([resolver](const TYPE& x) mutable {
+        ->then([resolver](const TYPE& x) {
           resolver.resolve(x);
         })
-        ->error([resolver](std::exception_ptr err) mutable{
+        ->error([resolver](std::exception_ptr err) {
            resolver.reject(err);
         });
       });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) mutable {
+      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
         resolver.reject(err);
       });
     });
@@ -206,10 +210,10 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver) {
-      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value) mutable {
+      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value) {
         resolver.resolve(func(value));
       });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) mutable {
+      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
         resolver.reject(err);
       });
     });
@@ -224,11 +228,11 @@ public:
   {
     auto THIS = this->shared_from_this();
     return Promise<>::create<value_type>([THIS, func](resolver resolver){
-      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value) mutable {
+      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value) {
         func(value);
         resolver.resolve(value);
       });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) mutable {
+      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
         resolver.reject(err);
       });
     });
@@ -249,7 +253,7 @@ public:
       });
       THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err){
         func(err)
-        ->then([resolver](const TYPE& x) mutable {
+        ->then([resolver](const TYPE& x) {
           resolver.resolve(x);
         })
         ->error([resolver](std::exception_ptr err){
@@ -288,10 +292,10 @@ public:
   {
     auto THIS = this->shared_from_this();
     return Promise<>::create<value_type>([THIS, func](resolver resolver) {
-      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) mutable {
+      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) {
         resolver.resolve(value);
       });
-      THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err) mutable {
+      THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err) {
         func(err);
         resolver.reject(err);
       });
@@ -314,7 +318,7 @@ public:
       // });
       THIS->add_finally_handler([THIS, resolver, func](){
         func()
-        ->then([resolver](const TYPE& x) mutable {
+        ->then([resolver](const TYPE& x) {
           resolver.resolve(x);
         })
         ->error([resolver](std::exception_ptr err){
@@ -354,10 +358,10 @@ public:
   {
     auto THIS = this->shared_from_this();
     return Promise<>::create<value_type>([THIS, func](resolver resolver) {
-      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) mutable {
+      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) {
         resolver.resolve(value);
       });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) mutable {
+      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
         resolver.reject(err);
       });
       THIS->add_finally_handler([THIS, resolver, func](){
