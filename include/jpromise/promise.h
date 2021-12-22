@@ -96,7 +96,7 @@ private:
   Promise() : state_(state::pending) {}
 
   void add_fulfilled_handler(on_fulfilled_fn f){
-    const state s = [=](){
+    const state s = [&](){
       guard lock(mtx_);
       if(state_ == state::pending){
         fulfilled_handlers_.push(f);
@@ -109,7 +109,7 @@ private:
   }
 
   void add_rejected_handler(on_rejected_fn f){
-    const state s = [=](){
+    const state s = [&](){
       guard lock(mtx_);
       if(state_ == state::pending){
         rejected_handlers_.push(f);
@@ -122,7 +122,7 @@ private:
   }
 
   void add_finally_handler(on_finally_fn f){
-    const state s = [=](){
+    const state s = [&](){
       guard lock(mtx_);
       if(state_ == state::pending){
         finally_handlers_.push(f);
