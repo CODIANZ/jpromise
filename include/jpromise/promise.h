@@ -71,23 +71,23 @@ public:
   };
   friend struct resolver;
 
+  struct handler {
+    std::function<void(const value_type&)>  on_fulfilled;
+    std::function<void(std::exception_ptr)> on_rejected;
+  };
+
 public:
   using executor_fn = std::function<void(resolver)>;
 
 private:
   enum class state {pending, fulfilled, rejected};
-  using on_fulfilled_fn = std::function<void(const value_type&)>;
-  using on_rejected_fn  = std::function<void(std::exception_ptr)>;
-  using on_finally_fn   = std::function<void()>;
 
   mtx                     mtx_;
   state                   state_;
   value_type              value_;
   std::exception_ptr      error_;
 
-  std::queue<on_fulfilled_fn> fulfilled_handlers_;
-  std::queue<on_rejected_fn>  rejected_handlers_;
-  std::queue<on_finally_fn>   finally_handlers_;
+  std::queue<handler>     handlers_;
 
   void execute(executor_fn executor) {
     executor(resolver(this->shared_from_this()));
@@ -95,42 +95,19 @@ private:
 
   Promise() : state_(state::pending) {}
 
-  void add_fulfilled_handler(on_fulfilled_fn f){
+  void add_handler(handler h){
     const state s = [&](){
       guard lock(mtx_);
       if(state_ == state::pending){
-        fulfilled_handlers_.push(f);
+        handlers_.push(h);
       }
       return state_;
     }();
     if(s == state::fulfilled){
-      f(value_);
+      if(h.on_fulfilled) h.on_fulfilled(value_);
     }
-  }
-
-  void add_rejected_handler(on_rejected_fn f){
-    const state s = [&](){
-      guard lock(mtx_);
-      if(state_ == state::pending){
-        rejected_handlers_.push(f);
-      }
-      return state_;
-    }();
-    if(s == state::rejected){
-      f(error_);
-    }
-  }
-
-  void add_finally_handler(on_finally_fn f){
-    const state s = [&](){
-      guard lock(mtx_);
-      if(state_ == state::pending){
-        finally_handlers_.push(f);
-      }
-      return state_;
-    }();
-    if(s != state::pending){
-      f();
+    else if(s == state::rejected){
+      if(h.on_rejected) h.on_rejected(error_);
     }
   }
 
@@ -142,15 +119,11 @@ private:
       value_ = std::forward<U>(value);
     }
     /** no lock required from here */
-    while(!fulfilled_handlers_.empty()){
-      fulfilled_handlers_.front()(value_);
-      fulfilled_handlers_.pop();
+    while(!handlers_.empty()){
+      auto&h = handlers_.front();
+      if(h.on_fulfilled) h.on_fulfilled(value_);
+      handlers_.pop();
     }
-    while(!finally_handlers_.empty()){
-      finally_handlers_.front()();
-      finally_handlers_.pop();
-    }
-    while(!rejected_handlers_.empty()) rejected_handlers_.pop();
   }
 
   void on_rejected(std::exception_ptr err) {
@@ -160,15 +133,11 @@ private:
       error_ = err;
     }
     /** no lock required from here */
-    while(!rejected_handlers_.empty()){
-      rejected_handlers_.front()(error_);
-      rejected_handlers_.pop();
+    while(!handlers_.empty()){
+      auto&h = handlers_.front();
+      if(h.on_rejected) h.on_rejected(err);
+      handlers_.pop();
     }
-    while(!finally_handlers_.empty()){
-      finally_handlers_.front()();
-      finally_handlers_.pop();
-    }
-    while(!fulfilled_handlers_.empty()) fulfilled_handlers_.pop();
   }
 
 public:
@@ -184,17 +153,19 @@ public:
     using TYPE = typename PROMISE::value_type;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver){
-      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value){
-        func(value)
-        ->then([resolver](const TYPE& x) {
-          resolver.resolve(x);
-        })
-        ->error([resolver](std::exception_ptr err) {
-           resolver.reject(err);
-        });
-      });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
-        resolver.reject(err);
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver, func](const value_type& value){
+          func(value)
+          ->then([resolver](const TYPE& x) {
+            resolver.resolve(x);
+          })
+          ->error([resolver](std::exception_ptr err) {
+            resolver.reject(err);
+          });
+        },
+        .on_rejected = [THIS, resolver](std::exception_ptr err) {
+          resolver.reject(err);
+        }
       });
     });
   } 
@@ -210,11 +181,13 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver) {
-      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value) {
-        resolver.resolve(func(value));
-      });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
-        resolver.reject(err);
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver, func](const value_type& value) {
+          resolver.resolve(func(value));
+        },
+        .on_rejected = [THIS, resolver](std::exception_ptr err) {
+          resolver.reject(err);
+        }
       });
     });
   } 
@@ -228,12 +201,14 @@ public:
   {
     auto THIS = this->shared_from_this();
     return Promise<>::create<value_type>([THIS, func](resolver resolver){
-      THIS->add_fulfilled_handler([THIS, resolver, func](const value_type& value) {
-        func(value);
-        resolver.resolve(value);
-      });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
-        resolver.reject(err);
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver, func](const value_type& value) {
+          func(value);
+          resolver.resolve(value);
+        },
+        .on_rejected = [THIS, resolver](std::exception_ptr err) {
+          resolver.reject(err);
+        }
       });
     });
   } 
@@ -248,17 +223,19 @@ public:
     using TYPE = typename PROMISE::value_type;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver){
-      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) {
-        resolver.resolve(value);
-      });
-      THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err){
-        func(err)
-        ->then([resolver](const TYPE& x) {
-          resolver.resolve(x);
-        })
-        ->error([resolver](std::exception_ptr err){
-           resolver.reject(err);
-        });
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver](const value_type& value) {
+          resolver.resolve(value);
+        },
+        .on_rejected = [THIS, resolver, func](std::exception_ptr err){
+          func(err)
+          ->then([resolver](const TYPE& x) {
+            resolver.resolve(x);
+          })
+          ->error([resolver](std::exception_ptr err){
+            resolver.reject(err);
+          });
+        }
       });
     });
   } 
@@ -274,11 +251,13 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver){
-      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value){
-        resolver.resolve(value);
-      });
-      THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err){
-        resolver.resolve(func(err));
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver](const value_type& value){
+          resolver.resolve(value);
+        },
+        .on_rejected = [THIS, resolver, func](std::exception_ptr err){
+          resolver.resolve(func(err));
+        }
       });
     });
   } 
@@ -292,12 +271,14 @@ public:
   {
     auto THIS = this->shared_from_this();
     return Promise<>::create<value_type>([THIS, func](resolver resolver) {
-      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) {
-        resolver.resolve(value);
-      });
-      THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err) {
-        func(err);
-        resolver.reject(err);
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver](const value_type& value) {
+          resolver.resolve(value);
+        },
+        .on_rejected = [THIS, resolver, func](std::exception_ptr err) {
+          func(err);
+          resolver.reject(err);
+        }
       });
     });
   }
@@ -312,18 +293,18 @@ public:
     using TYPE = typename PROMISE::value_type;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver){
-      // THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) {
-      // });
-      // THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err){
-      // });
-      THIS->add_finally_handler([THIS, resolver, func](){
+      auto fn = [THIS, resolver, func](){
         func()
         ->then([resolver](const TYPE& x) {
           resolver.resolve(x);
         })
         ->error([resolver](std::exception_ptr err){
-           resolver.reject(err);
+          resolver.reject(err);
         });
+      };
+      THIS->add_handler({
+        .on_fulfilled = [THIS, fn](const value_type&){ fn(); },
+        .on_rejected = [THIS, fn](std::exception_ptr){ fn(); },
       });
     });
   } 
@@ -339,12 +320,13 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = this->shared_from_this();
     return Promise<>::create<TYPE>([THIS, func](typename PROMISE::resolver resolver){
-      // THIS->add_fulfilled_handler([THIS, resolver](const value_type& value){
-      // });
-      // THIS->add_rejected_handler([THIS, resolver, func](std::exception_ptr err){
-      // });
-      THIS->add_finally_handler([THIS, resolver, func](){
-        resolver.resolve(func());
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver, func](const value_type&){
+          resolver.resolve(func());
+        },
+        .on_rejected = [THIS, resolver, func](std::exception_ptr){
+          resolver.resolve(func());
+        }
       });
     });
   } 
@@ -358,14 +340,15 @@ public:
   {
     auto THIS = this->shared_from_this();
     return Promise<>::create<value_type>([THIS, func](resolver resolver) {
-      THIS->add_fulfilled_handler([THIS, resolver](const value_type& value) {
-        resolver.resolve(value);
-      });
-      THIS->add_rejected_handler([THIS, resolver](std::exception_ptr err) {
-        resolver.reject(err);
-      });
-      THIS->add_finally_handler([THIS, resolver, func](){
-        func();
+      THIS->add_handler({
+        .on_fulfilled = [THIS, resolver, func](const value_type& value){
+          func();
+          resolver.resolve(value);
+        },
+        .on_rejected = [THIS, resolver, func](std::exception_ptr err){
+          func();
+          resolver.reject(err);
+        }
       });
     });
   }
