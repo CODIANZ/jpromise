@@ -17,11 +17,11 @@ void heavy(std::function<void()> f, int x) {
 
 template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
   using TT = typename std::remove_const<typename std::remove_reference<T>::type>::type;
-  return Promise<>::create<TT>([=](auto resolver) mutable {
+  return Promise<>::create<TT>([&](auto resolver) {
     if(delay == 0) resolver.resolve(std::forward<T>(value));
     else{
-      heavy([=]() mutable {
-        resolver.resolve(std::forward<T>(value));
+      heavy([=]() {
+        resolver.resolve(std::move(value));
       }, delay);
     }
   });
@@ -30,10 +30,10 @@ template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
 struct test_error : std::exception {};
 
 template <typename T> typename Promise<T>::sp perror(int delay = 0) {
-    return Promise<>::create<T>([=](auto resolver) mutable {
+    return Promise<>::create<T>([=](auto resolver)  {
     if(delay == 0) resolver.reject(std::make_exception_ptr(test_error{}));
     else{
-      heavy([=]() mutable {
+      heavy([=]() {
         resolver.reject(std::make_exception_ptr(test_error{}));
       }, delay);
     }
@@ -121,12 +121,45 @@ void test_4() {
     assert(x == 1);
     return perror<int>();
   })
-  ->then([](const auto& x){ /* passthru */
+  ->then([](const auto& x){
+    /* never */
     log() << x << std::endl;
   })
   ->error([](std::exception_ptr){
     log() << "error" << std::endl;
   });
+}
+
+
+void test_5() {
+  {
+    log() << "#1 start" << std::endl;
+    pvalue(1, 1000)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    });
+    log() << "#1 end" << std::endl;
+  }
+
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  log() << "wait 1sec" << std::endl;
+
+  {
+    log() << "#2 start" << std::endl;
+    std::condition_variable cond;
+    pvalue(1, 1000)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    })
+    ->finally([&](){
+      log() << "finally" << std::endl;
+      cond.notify_one();
+    });
+    std::mutex mtx;
+    std::unique_lock<std::mutex> lock(mtx);
+    cond.wait(lock);
+    log() << "#2 end" << std::endl;
+  }
 }
 
 int main()
@@ -142,4 +175,7 @@ int main()
 
   log() << "================ test_4 ================" << std::endl;
   test_4();
+
+  log() << "================ test_5 ================" << std::endl;
+  test_5();
 }
