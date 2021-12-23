@@ -54,13 +54,25 @@ private:
     u.push_back(shared_base()); /** add self instance */
     return std::move(u);
   }
+  PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
 
 protected:
+  enum class state {pending, fulfilled, rejected};
+
+  using mtx         = std::mutex;
+  using guard       = std::lock_guard<mtx>;
+  using ulock       = std::unique_lock<mtx>;
+
+  mtx                     mtx_;
+  std::condition_variable cond_;
+  state                   state_ = state::pending;
+  std::exception_ptr      error_ = nullptr;
+
   sp shared_base() { return shared_from_this(); }
+
   template <typename T> std::shared_ptr<Promise<T>> shared_this_as() {
     return std::dynamic_pointer_cast<Promise<T>>(shared_from_this());
   }
-  PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
 
   virtual void remove_handler(PromiseBase*) = 0;
 
@@ -91,12 +103,6 @@ public:
   using value_type  = T;
   using sp          = std::shared_ptr<Promise<value_type>>;
 
-private:
-  using mtx         = std::mutex;
-  using guard       = std::lock_guard<mtx>;
-  using ulock       = std::unique_lock<mtx>;
-
-public:
   /** treat as mutable for use in lambda functions */
   class resolver {
   friend class Promise<T>;
@@ -127,13 +133,7 @@ public:
   using executor_fn = std::function<void(resolver)>;
 
 private:
-  enum class state {pending, fulfilled, rejected};
-
-  mtx                     mtx_;
-  std::condition_variable cond_;
-  state                   state_ = state::pending;
   value_type              value_ = {};
-  std::exception_ptr      error_ = nullptr;
   std::unordered_map<PromiseBase*, handler>   handlers_;
 
   sp shared_this() {
