@@ -64,9 +64,18 @@ protected:
 
   virtual void remove_handler(PromiseBase*) = 0;
 
-public:
+  template <typename SINK> typename Promise<SINK>::sp create_sink() {
+    return std::shared_ptr<Promise<SINK>>(new Promise<SINK>(shared_base()));
+  }
+
+  template<typename SINK> void execute_sink(typename Promise<SINK>::sp sink, typename Promise<SINK>::executor_fn executor){
+    sink->execute(executor);
+  }
+
   PromiseBase() = default;
   PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
+
+public:
   virtual ~PromiseBase(){
     auto source = above();
     if(source){
@@ -76,6 +85,8 @@ public:
 };
 
 template <typename T> class Promise : public PromiseBase {
+friend class Promise<>;
+friend class PromiseBase;
 public:
   using value_type  = T;
   using sp          = std::shared_ptr<Promise<value_type>>;
@@ -113,7 +124,6 @@ public:
     std::function<void(std::exception_ptr)> on_rejected = {};
   };
 
-public:
   using executor_fn = std::function<void(resolver)>;
 
 private:
@@ -125,11 +135,6 @@ private:
   value_type              value_ = {};
   std::exception_ptr      error_ = nullptr;
   std::unordered_map<PromiseBase*, handler>   handlers_;
-
-  template <typename SINK> typename Promise<SINK>::sp create_sink() {
-    auto sink = std::shared_ptr<Promise<SINK>>(new Promise<SINK>(shared_base()));
-    return sink;
-  }
 
   sp shared_this() {
     return shared_this_as<T>();
@@ -194,12 +199,6 @@ private:
     handlers_.erase(inst);
   }
 
-public:
-  Promise() = default;
-  Promise(PromiseBase::sp source) : PromiseBase(source){}
-  ~Promise() = default;
-
-  /** internal use */
   void execute(executor_fn executor) {
     try{
       executor(resolver(shared_this()));
@@ -208,6 +207,12 @@ public:
       on_rejected(std::current_exception());
     }
   }
+
+  Promise() = default;
+  Promise(PromiseBase::sp source) : PromiseBase(source){}
+
+public:
+  ~Promise() = default;
 
   const value_type& wait() {
     std::mutex mtx;
@@ -245,7 +250,7 @@ public:
     using TYPE = typename PROMISE::value_type;
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
-    sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
+    execute_sink<TYPE>(sink, [THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver, func](const value_type& value){
           try{
@@ -274,7 +279,7 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
-    sink->execute([THIS, sink, func](typename PROMISE::resolver resolver) {
+    execute_sink<TYPE>(sink, [THIS, sink, func](typename PROMISE::resolver resolver) {
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver, func](const value_type& value) {
           resolver.resolve(func(value));
@@ -296,7 +301,7 @@ public:
   {
     auto THIS = shared_this();
     auto sink = create_sink<value_type>();
-    sink->execute([THIS, sink, func](resolver resolver){
+    execute_sink<value_type>(sink, [THIS, sink, func](resolver resolver){
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver, func](const value_type& value) {
           func(value);
@@ -320,7 +325,7 @@ public:
     using TYPE = typename PROMISE::value_type;
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
-    sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
+    execute_sink<TYPE>(sink, [THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver](const value_type& value) {
           resolver.resolve(value);
@@ -349,7 +354,7 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
-    sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
+    execute_sink<TYPE>(sink, [THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver](const value_type& value){
           resolver.resolve(value);
@@ -371,7 +376,7 @@ public:
   {
     auto THIS = shared_this();
     auto sink = create_sink<value_type>();
-    sink->execute([THIS, sink, func](resolver resolver) {
+    execute_sink<value_type>(sink, [THIS, sink, func](resolver resolver) {
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver](const value_type& value) {
           resolver.resolve(value);
@@ -395,7 +400,7 @@ public:
     using TYPE = typename PROMISE::value_type;
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
-    sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
+    execute_sink<TYPE>(sink, [THIS, sink, func](typename PROMISE::resolver resolver){
       auto fn = [resolver, func](){
         try{
           resolver.resolve(func()->wait());
@@ -423,7 +428,7 @@ public:
     using PROMISE = Promise<TYPE>;
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
-    sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
+    execute_sink<TYPE>(sink, [THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver, func](const value_type&){
           resolver.resolve(func());
@@ -445,7 +450,7 @@ public:
   {
     auto THIS = shared_this();
     auto sink = create_sink<value_type>();
-    sink->execute([THIS, sink, func](resolver resolver) {
+    execute_sink<value_type>(sink, [THIS, sink, func](resolver resolver) {
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver, func](const value_type& value){
           func();
