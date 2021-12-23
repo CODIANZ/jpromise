@@ -62,12 +62,17 @@ protected:
   }
   PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
 
+  virtual void remove_handler(PromiseBase*) = 0;
+
 public:
   PromiseBase() = default;
   PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
-  virtual ~PromiseBase() = default;
-
-  virtual void remove_handler(PromiseBase*) = 0;
+  virtual ~PromiseBase(){
+    auto source = above();
+    if(source){
+      source->remove_handler(this);
+    }
+  }
 };
 
 template <typename T> class Promise : public PromiseBase {
@@ -184,21 +189,15 @@ private:
     }
   }
 
-public:
-  Promise() = default;
-  Promise(PromiseBase::sp source) : PromiseBase(source){}
-  ~Promise(){
-    auto source = above();
-    if(source){
-      source->remove_handler(this);
-    }
-  };
-
-  /** internal use */
   virtual void remove_handler(PromiseBase* inst){
     guard lock(mtx_);
     handlers_.erase(inst);
   }
+
+public:
+  Promise() = default;
+  Promise(PromiseBase::sp source) : PromiseBase(source){}
+  ~Promise() = default;
 
   /** internal use */
   void execute(executor_fn executor) {
