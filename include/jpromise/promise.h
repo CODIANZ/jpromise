@@ -48,14 +48,16 @@ public:
   using sp = std::shared_ptr<PromiseBase>;
 
 private:
-  std::vector<PromiseBase::sp> upstream_;
+  const std::vector<PromiseBase::sp> upstream_;
+  std::vector<PromiseBase::sp> upstream() {
+    auto u = upstream_;
+    u.push_back(shared_base()); /** add self instance */
+    return std::move(u);
+  }
 
 public:
   PromiseBase() = default;
-  PromiseBase(PromiseBase::sp source) {
-    upstream_ = source->upstream_;
-    upstream_.push_back(source);
-  }
+  PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
   virtual ~PromiseBase() = default;
 
   sp shared_base() { return shared_from_this(); }
