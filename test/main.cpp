@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <jpromise/promise.h>
 
 using namespace JPromise;
@@ -17,24 +18,38 @@ void heavy(std::function<void()> f, int x) {
 
 template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
   using TT = typename std::remove_const<typename std::remove_reference<T>::type>::type;
-  return Promise<>::create<TT>([&](auto resolver) {
+  return Promise<>::create<TT>([&value, delay](auto resolver) {
     if(delay == 0) resolver.resolve(std::forward<T>(value));
     else{
-      heavy([=]() {
+      heavy([resolver, value]() {
         resolver.resolve(std::move(value));
       }, delay);
     }
   });
 }
 
-struct test_error : std::exception {};
+struct test_error : public std::exception {
+  std::string what_;
+  test_error(std::string what) noexcept : what_(what) {}
+  virtual const char* what() const noexcept { return what_.c_str(); }
+};
 
-template <typename T> typename Promise<T>::sp perror(int delay = 0) {
-    return Promise<>::create<T>([=](auto resolver)  {
-    if(delay == 0) resolver.reject(std::make_exception_ptr(test_error{}));
+std::string error_to_string(std::exception_ptr err){
+  try{ std::rethrow_exception(err); }
+  catch(std::exception& e){
+    return e.what();
+  }
+  catch(...){}
+  return "unknown";
+}
+
+template <typename T> typename Promise<T>::sp perror(const std::string& text, int delay = 0) {
+  auto err = std::make_exception_ptr(test_error{text});
+  return Promise<>::create<T>([delay, err](auto resolver)  {
+    if(delay == 0) resolver.reject(err);
     else{
-      heavy([=]() {
-        resolver.reject(std::make_exception_ptr(test_error{}));
+      heavy([resolver, err]() {
+        resolver.reject(err);
       }, delay);
     }
   });
@@ -119,14 +134,14 @@ void test_4() {
   ->then([](const auto& x){
     log() << x << std::endl;
     assert(x == 1);
-    return perror<int>();
+    return perror<int>("test4 error");
   })
   ->then([](const auto& x){
     /* never */
     log() << x << std::endl;
   })
-  ->error([](std::exception_ptr){
-    log() << "error" << std::endl;
+  ->error([](std::exception_ptr e){
+    log() << "error" << error_to_string(e) << std::endl;
   });
 }
 
@@ -134,32 +149,109 @@ void test_4() {
 void test_5() {
   {
     log() << "#1 start" << std::endl;
-    pvalue(1, 1000)
+    auto p = pvalue<std::string>("#1 - a", 1000)
     ->then([](const auto& x){
       log() << x << std::endl;
-    });
-    log() << "#1 end" << std::endl;
-  }
-
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-  log() << "wait 1sec" << std::endl;
-
-  {
-    log() << "#2 start" << std::endl;
-    std::condition_variable cond;
-    pvalue(1, 1000)
+      return pvalue(x + "b", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "c", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "d", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "e", 1000);
+    })
     ->then([](const auto& x){
       log() << x << std::endl;
     })
     ->finally([&](){
-      log() << "finally" << std::endl;
-      cond.notify_one();
+      log() << "#1 finally" << std::endl;
     });
-    std::mutex mtx;
-    std::unique_lock<std::mutex> lock(mtx);
-    cond.wait(lock);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    log() << "wait 2sec" << std::endl;
+
+    log() << "#1 end" << std::endl;
+  }
+
+  {
+    log() << "#2 start" << std::endl;
+    pvalue<std::string>("#2 - a", 1000)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "b", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "c", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "d", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + "e", 1000);
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    })
+    ->finally([&](){
+      log() << "#2 finally" << std::endl;
+    })
+    ->wait();
     log() << "#2 end" << std::endl;
   }
+}
+
+void test_6() {
+  Promise<>::create<int>([](auto resolver){
+    throw test_error("#1");
+  })
+  ->error([](std::exception_ptr err){
+    log() << error_to_string(err) << std::endl;
+  });
+
+  pvalue(0)
+  ->then([](const auto& x){
+    throw test_error("#2");
+  })
+  ->error([](std::exception_ptr err){
+    log() << error_to_string(err) << std::endl;
+  });
+}
+
+void test_7() {
+  const auto r = pvalue(1, 100)
+  ->then([](const auto& x){
+    log() << x << std::endl;
+    return pvalue(x + 1, 100)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return x + 1;
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + 1, 100)
+      ->then([](const auto& x){
+        log() << x << std::endl;
+        return pvalue(x + 1, 100);
+      });
+    });
+  })
+  ->then([](const auto& x){
+    log() << x << std::endl;
+    std::stringstream ss;
+    ss << "result = " << x << std::endl;
+    return ss.str();
+  })
+  ->wait();
+  log() << r << std::endl;
 }
 
 int main()
@@ -178,4 +270,10 @@ int main()
 
   log() << "================ test_5 ================" << std::endl;
   test_5();
+
+  log() << "================ test_6 ================" << std::endl;
+  test_6();
+
+  log() << "================ test_7 ================" << std::endl;
+  test_7();
 }
