@@ -280,7 +280,7 @@ void test_8() {
     })
     ->stand_alone({
       .on_fulfilled = [](const auto& x){
-        std::cout << "on_fulfilled " << x;
+        std::cout << "on_fulfilled " << x << std::endl;
       }
     });
   }
