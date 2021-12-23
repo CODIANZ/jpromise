@@ -55,24 +55,25 @@ private:
     return std::move(u);
   }
 
-public:
-  PromiseBase() = default;
-  PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
-  virtual ~PromiseBase() = default;
-
+protected:
   sp shared_base() { return shared_from_this(); }
   template <typename T> std::shared_ptr<Promise<T>> shared_this_as() {
     return std::dynamic_pointer_cast<Promise<T>>(shared_from_this());
   }
   PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
+
+public:
+  PromiseBase() = default;
+  PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
+  virtual ~PromiseBase() = default;
+
   virtual void remove_handler(PromiseBase*) = 0;
 };
 
 template <typename T> class Promise : public PromiseBase {
 public:
-  using self_type   = Promise<T>;
-  using sp          = std::shared_ptr<self_type>;
   using value_type  = T;
+  using sp          = std::shared_ptr<Promise<value_type>>;
 
 private:
   using mtx         = std::mutex;
@@ -103,8 +104,8 @@ public:
   friend struct resolver;
 
   struct handler {
-    std::function<void(const value_type&)>  on_fulfilled;
-    std::function<void(std::exception_ptr)> on_rejected;
+    std::function<void(const value_type&)>  on_fulfilled = {};
+    std::function<void(std::exception_ptr)> on_rejected = {};
   };
 
 public:
@@ -115,9 +116,9 @@ private:
 
   mtx                     mtx_;
   std::condition_variable cond_;
-  state                   state_;
-  value_type              value_;
-  std::exception_ptr      error_;
+  state                   state_ = state::pending;
+  value_type              value_ = {};
+  std::exception_ptr      error_ = nullptr;
   std::unordered_map<PromiseBase*, handler>   handlers_;
 
   template <typename SINK> typename Promise<SINK>::sp create_sink() {
@@ -184,11 +185,8 @@ private:
   }
 
 public:
-  Promise() : state_(state::pending) {}
-  Promise(PromiseBase::sp source) :
-    state_(state::pending),
-    PromiseBase(source)
-  {}
+  Promise() = default;
+  Promise(PromiseBase::sp source) : PromiseBase(source){}
   ~Promise(){
     auto source = above();
     if(source){
@@ -219,6 +217,23 @@ public:
     cond_.wait(lock, [THIS]{ return THIS->state_ != state::pending; });
     if(state_ == state::rejected) std::rethrow_exception(error_);
     return value_; 
+  }
+
+  void stand_alone(handler h = {}) {
+    auto THIS = shared_this();
+    std::thread([THIS, h]{
+      try{
+        const auto& value = THIS->wait();
+        if(h.on_fulfilled){
+          h.on_fulfilled(value);
+        }
+      }
+      catch(...){
+        if(h.on_rejected){
+          h.on_rejected(std::current_exception());
+        }
+      }
+    }).detach();
   }
 
   template <typename F>

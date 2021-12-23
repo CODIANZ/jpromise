@@ -1,6 +1,6 @@
 #include <iostream>
 #include <sstream>
-#include <jpromise/promise.h>
+#include <jpromise/jpromise.h>
 
 using namespace JPromise;
 
@@ -254,6 +254,41 @@ void test_7() {
   log() << r << std::endl;
 }
 
+void test_8() {
+  {
+    pvalue<std::string>("#1")
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    })
+    ->stand_alone();
+  }
+
+  {
+    pvalue<std::string>("#2", 1000)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    })
+    ->stand_alone();
+  }
+  log() << "wait 2 sec" << std::endl;
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+
+  {
+    pvalue<std::string>("#3", 1000)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+    })
+    ->stand_alone({
+      .on_fulfilled = [](const auto& x){
+        std::cout << "on_fulfilled " << x;
+      }
+    });
+  }
+  log() << "wait 2 sec" << std::endl;
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+}
+
+
 int main()
 {
   log() << "================ test_1 ================" << std::endl;
@@ -276,4 +311,7 @@ int main()
 
   log() << "================ test_7 ================" << std::endl;
   test_7();
+
+  log() << "================ test_8 ================" << std::endl;
+  test_8();
 }
