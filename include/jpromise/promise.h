@@ -46,10 +46,23 @@ template<typename T> struct is_promise_sp<std::shared_ptr<Promise<T>>> : std::tr
 class PromiseBase : public std::enable_shared_from_this<PromiseBase> {
 public:
   using sp = std::shared_ptr<PromiseBase>;
+
+private:
+  std::vector<PromiseBase::sp> upstream_;
+
+public:
+  PromiseBase() = default;
+  PromiseBase(PromiseBase::sp source) {
+    upstream_ = source->upstream_;
+    upstream_.push_back(source);
+  }
+  virtual ~PromiseBase() = default;
+
   sp shared_base() { return shared_from_this(); }
   template <typename T> std::shared_ptr<Promise<T>> shared_this_as() {
     return std::dynamic_pointer_cast<Promise<T>>(shared_from_this());
   }
+  PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
   virtual void remove_handler(PromiseBase*) = 0;
 };
 
@@ -99,11 +112,11 @@ private:
   enum class state {pending, fulfilled, rejected};
 
   mtx                     mtx_;
+  std::condition_variable cond_;
   state                   state_;
   value_type              value_;
   std::exception_ptr      error_;
   std::unordered_map<PromiseBase*, handler>   handlers_;
-  PromiseBase::sp         source_;
 
   template <typename SINK> typename Promise<SINK>::sp create_sink() {
     auto sink = std::shared_ptr<Promise<SINK>>(new Promise<SINK>(shared_base()));
@@ -145,6 +158,7 @@ private:
       guard lock(mtx_);
       state_ = state::fulfilled;
       value_ = std::forward<U>(value);
+      cond_.notify_all();
     }
     handler h;
     while(consume_handler(h)){
@@ -157,6 +171,7 @@ private:
       guard lock(mtx_);
       state_ = state::rejected;
       error_ = err;
+      cond_.notify_all();
     }
     handler h;
     while(consume_handler(h)){
@@ -166,10 +181,14 @@ private:
 
 public:
   Promise() : state_(state::pending) {}
-  Promise(PromiseBase::sp source) : state_(state::pending), source_(source) {}
+  Promise(PromiseBase::sp source) :
+    state_(state::pending),
+    PromiseBase(source)
+  {}
   ~Promise(){
-    if(source_){
-      source_->remove_handler(this);
+    auto source = above();
+    if(source){
+      source->remove_handler(this);
     }
   };
 
@@ -180,6 +199,15 @@ public:
 
   void execute(executor_fn executor) {
     executor(resolver(shared_this()));
+  }
+
+  const value_type& wait() {
+    std::mutex mtx;
+    std::unique_lock<std::mutex> lock(mtx);
+    auto THIS = shared_this();
+    cond_.wait(lock, [THIS]{ return THIS->state_ != state::pending; });
+    if(state_ == state::rejected) std::rethrow_exception(error_);
+    return value_; 
   }
 
   template <typename F>
@@ -195,15 +223,14 @@ public:
     sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [resolver, func](const value_type& value){
-          func(value)
-          ->then([resolver](const TYPE& x) {
-            resolver.resolve(x);
-          })
-          ->error([resolver](std::exception_ptr err) {
-            resolver.reject(err);
-          });
+          try{
+            resolver.resolve(func(value)->wait());
+          }
+          catch(std::exception& e){
+            resolver.reject(std::make_exception_ptr(e));
+          }
         },
-        .on_rejected = [THIS, sink, resolver](std::exception_ptr err) {
+        .on_rejected = [resolver](std::exception_ptr err) {
           resolver.reject(err);
         }
       });
@@ -224,10 +251,10 @@ public:
     auto sink = create_sink<TYPE>();
     sink->execute([THIS, sink, func](typename PROMISE::resolver resolver) {
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver, func](const value_type& value) {
+        .on_fulfilled = [resolver, func](const value_type& value) {
           resolver.resolve(func(value));
         },
-        .on_rejected = [THIS, sink, resolver](std::exception_ptr err) {
+        .on_rejected = [resolver](std::exception_ptr err) {
           resolver.reject(err);
         }
       });
@@ -246,11 +273,11 @@ public:
     auto sink = create_sink<value_type>();
     sink->execute([THIS, sink, func](resolver resolver){
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver, func](const value_type& value) {
+        .on_fulfilled = [resolver, func](const value_type& value) {
           func(value);
           resolver.resolve(value);
         },
-        .on_rejected = [THIS, sink, resolver](std::exception_ptr err) {
+        .on_rejected = [resolver](std::exception_ptr err) {
           resolver.reject(err);
         }
       });
@@ -270,17 +297,16 @@ public:
     auto sink = create_sink<TYPE>();
     sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver](const value_type& value) {
+        .on_fulfilled = [resolver](const value_type& value) {
           resolver.resolve(value);
         },
-        .on_rejected = [THIS, sink, resolver, func](std::exception_ptr err){
-          func(err)
-          ->then([resolver](const TYPE& x) {
-            resolver.resolve(x);
-          })
-          ->error([resolver](std::exception_ptr err){
-            resolver.reject(err);
-          });
+        .on_rejected = [resolver, func](std::exception_ptr err){
+          try{
+            resolver.resolve(func(err)->wait());
+          }
+          catch(std::exception& e){
+            resolver.reject(std::make_exception_ptr(e));
+          }
         }
       });
     });
@@ -300,10 +326,10 @@ public:
     auto sink = create_sink<TYPE>();
     sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver](const value_type& value){
+        .on_fulfilled = [resolver](const value_type& value){
           resolver.resolve(value);
         },
-        .on_rejected = [THIS, sink, resolver, func](std::exception_ptr err){
+        .on_rejected = [resolver, func](std::exception_ptr err){
           resolver.resolve(func(err));
         }
       });
@@ -322,10 +348,10 @@ public:
     auto sink = create_sink<value_type>();
     sink->execute([THIS, sink, func](resolver resolver) {
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver](const value_type& value) {
+        .on_fulfilled = [resolver](const value_type& value) {
           resolver.resolve(value);
         },
-        .on_rejected = [THIS, sink, resolver, func](std::exception_ptr err) {
+        .on_rejected = [resolver, func](std::exception_ptr err) {
           func(err);
           resolver.reject(err);
         }
@@ -345,14 +371,13 @@ public:
     auto THIS = shared_this();
     auto sink = create_sink<TYPE>();
     sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
-      auto fn = [THIS, sink, resolver, func](){
-        func()
-        ->then([resolver](const TYPE& x) {
-          resolver.resolve(x);
-        })
-        ->error([resolver](std::exception_ptr err){
-          resolver.reject(err);
-        });
+      auto fn = [resolver, func](){
+        try{
+          resolver.resolve(func()->wait());
+        }
+        catch(std::exception& e){
+          resolver.reject(std::make_exception_ptr(e));
+        }
       };
       THIS->add_handler(sink.get(), {
         .on_fulfilled = [fn](const value_type&){ fn(); },
@@ -375,10 +400,10 @@ public:
     auto sink = create_sink<TYPE>();
     sink->execute([THIS, sink, func](typename PROMISE::resolver resolver){
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver, func](const value_type&){
+        .on_fulfilled = [resolver, func](const value_type&){
           resolver.resolve(func());
         },
-        .on_rejected = [THIS, sink, resolver, func](std::exception_ptr){
+        .on_rejected = [resolver, func](std::exception_ptr){
           resolver.resolve(func());
         }
       });
@@ -397,11 +422,11 @@ public:
     auto sink = create_sink<value_type>();
     sink->execute([THIS, sink, func](resolver resolver) {
       THIS->add_handler(sink.get(), {
-        .on_fulfilled = [THIS, sink, resolver, func](const value_type& value){
+        .on_fulfilled = [resolver, func](const value_type& value){
           func();
           resolver.resolve(value);
         },
-        .on_rejected = [THIS, sink, resolver, func](std::exception_ptr err){
+        .on_rejected = [resolver, func](std::exception_ptr err){
           func();
           resolver.reject(err);
         }

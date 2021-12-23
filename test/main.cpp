@@ -132,6 +132,41 @@ void test_4() {
 
 
 void test_5() {
+  // {
+  //   auto p = pvalue<std::string>("#1 - a", 500)
+  //   ->then([](auto x){
+  //     log() << x << std::endl;
+  //     return pvalue(x + " b", 500);
+  //   })
+  //   ->then([](auto x){
+  //     log() << x << std::endl;
+  //   })
+  //   ->finally([](){
+  //     log() << "#1 finally" << std::endl;
+  //   });
+
+  //   log() << "wait" << std::endl;
+  //   std::this_thread::sleep_for(std::chrono::seconds(2));
+  // }
+  // log() << "scope out" << std::endl;
+
+  // {
+  //   pvalue<std::string>("#2 - a", 500)
+  //   ->then([](auto x){
+  //     log() << x << std::endl;
+  //     return pvalue(x + " b", 500);
+  //   })
+  //   ->then([](auto x){
+  //     log() << x << std::endl;
+  //   })
+  //   ->finally([](){
+  //     log() << "#2 finally" << std::endl;
+  //   });
+  //   std::this_thread::sleep_for(std::chrono::seconds(2));
+  // }
+
+    // std::this_thread::sleep_for(std::chrono::seconds(100));
+
   {
     log() << "#1 start" << std::endl;
     auto p = pvalue<std::string>("#1 - a", 1000)
@@ -166,8 +201,7 @@ void test_5() {
 
   {
     log() << "#2 start" << std::endl;
-    std::condition_variable cond;
-    auto p = pvalue<std::string>("#2 - a", 1000)
+    pvalue<std::string>("#2 - a", 1000)
     ->then([](const auto& x){
       log() << x << std::endl;
       return pvalue(x + "b", 1000);
@@ -189,11 +223,8 @@ void test_5() {
     })
     ->finally([&](){
       log() << "#2 finally" << std::endl;
-      cond.notify_one();
-    });
-    std::mutex mtx;
-    std::unique_lock<std::mutex> lock(mtx);
-    cond.wait(lock);
+    })
+    ->wait();
     log() << "#2 end" << std::endl;
   }
 }
