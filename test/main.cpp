@@ -134,14 +134,14 @@ void test_4() {
   ->then([](const auto& x){
     log() << x << std::endl;
     assert(x == 1);
-    return perror<int>("test4 error");
+    return perror<int>("test4");
   })
   ->then([](const auto& x){
     /* never */
     log() << x << std::endl;
   })
   ->error([](std::exception_ptr e){
-    log() << "error" << error_to_string(e) << std::endl;
+    log() << "error " << error_to_string(e) << std::endl;
   });
 }
 
@@ -288,6 +288,26 @@ void test_8() {
   std::this_thread::sleep_for(std::chrono::seconds(2));
 }
 
+void test_9() {
+  auto p = pvalue<std::string>("hello", 1000);
+
+  auto p1 = p->then([](const auto& x){
+    log() << "#1 " << x << std::endl;
+  });
+
+  auto p2 = p->then([](const auto& x){
+    log() << "#2 " << x << std::endl;
+  });
+
+  auto p3 = p->then([](const auto& x){
+    log() << "#3 " << x << std::endl;
+  });
+
+  p3.reset();
+
+  log() << "wait 2 sec" << std::endl;
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+}
 
 int main()
 {
@@ -314,4 +334,7 @@ int main()
 
   log() << "================ test_8 ================" << std::endl;
   test_8();
+
+  log() << "================ test_9 ================" << std::endl;
+  test_9();
 }
