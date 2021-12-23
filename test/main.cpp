@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <jpromise/promise.h>
 
 using namespace JPromise;
@@ -216,13 +217,41 @@ void test_6() {
     log() << error_to_string(err) << std::endl;
   });
 
-  pvalue<int>(0)
+  pvalue(0)
   ->then([](const auto& x){
     throw test_error("#2");
   })
   ->error([](std::exception_ptr err){
     log() << error_to_string(err) << std::endl;
   });
+}
+
+void test_7() {
+  const auto r = pvalue(1, 100)
+  ->then([](const auto& x){
+    log() << x << std::endl;
+    return pvalue(x + 1, 100)
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return x + 1;
+    })
+    ->then([](const auto& x){
+      log() << x << std::endl;
+      return pvalue(x + 1, 100)
+      ->then([](const auto& x){
+        log() << x << std::endl;
+        return pvalue(x + 1, 100);
+      });
+    });
+  })
+  ->then([](const auto& x){
+    log() << x << std::endl;
+    std::stringstream ss;
+    ss << "result = " << x << std::endl;
+    return ss.str();
+  })
+  ->wait();
+  log() << r << std::endl;
 }
 
 int main()
@@ -244,4 +273,7 @@ int main()
 
   log() << "================ test_6 ================" << std::endl;
   test_6();
+
+  log() << "================ test_7 ================" << std::endl;
+  test_7();
 }
