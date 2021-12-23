@@ -156,6 +156,7 @@ private:
   void on_fulfilled(U&& value) {
     {
       guard lock(mtx_);
+      assert(state_ == state::pending);
       state_ = state::fulfilled;
       value_ = std::forward<U>(value);
       cond_.notify_all();
@@ -169,6 +170,7 @@ private:
   void on_rejected(std::exception_ptr err) {
     {
       guard lock(mtx_);
+      assert(state_ == state::pending);
       state_ = state::rejected;
       error_ = err;
       cond_.notify_all();
