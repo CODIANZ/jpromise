@@ -27,14 +27,28 @@ template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
   });
 }
 
-struct test_error : std::exception {};
+struct test_error : public std::exception {
+  std::string what_;
+  test_error(std::string what) noexcept : what_(what) {}
+  virtual const char* what() const noexcept { return what_.c_str(); }
+};
 
-template <typename T> typename Promise<T>::sp perror(int delay = 0) {
-  return Promise<>::create<T>([delay](auto resolver)  {
-    if(delay == 0) resolver.reject(std::make_exception_ptr(test_error{}));
+std::string error_to_string(std::exception_ptr err){
+  try{ std::rethrow_exception(err); }
+  catch(std::exception& e){
+    return e.what();
+  }
+  catch(...){}
+  return "unknown";
+}
+
+template <typename T> typename Promise<T>::sp perror(const std::string& text, int delay = 0) {
+  auto err = std::make_exception_ptr(test_error{text});
+  return Promise<>::create<T>([delay, err](auto resolver)  {
+    if(delay == 0) resolver.reject(err);
     else{
-      heavy([resolver]() {
-        resolver.reject(std::make_exception_ptr(test_error{}));
+      heavy([resolver, err]() {
+        resolver.reject(err);
       }, delay);
     }
   });
@@ -119,54 +133,19 @@ void test_4() {
   ->then([](const auto& x){
     log() << x << std::endl;
     assert(x == 1);
-    return perror<int>();
+    return perror<int>("test4 error");
   })
   ->then([](const auto& x){
     /* never */
     log() << x << std::endl;
   })
-  ->error([](std::exception_ptr){
-    log() << "error" << std::endl;
+  ->error([](std::exception_ptr e){
+    log() << "error" << error_to_string(e) << std::endl;
   });
 }
 
 
 void test_5() {
-  // {
-  //   auto p = pvalue<std::string>("#1 - a", 500)
-  //   ->then([](auto x){
-  //     log() << x << std::endl;
-  //     return pvalue(x + " b", 500);
-  //   })
-  //   ->then([](auto x){
-  //     log() << x << std::endl;
-  //   })
-  //   ->finally([](){
-  //     log() << "#1 finally" << std::endl;
-  //   });
-
-  //   log() << "wait" << std::endl;
-  //   std::this_thread::sleep_for(std::chrono::seconds(2));
-  // }
-  // log() << "scope out" << std::endl;
-
-  // {
-  //   pvalue<std::string>("#2 - a", 500)
-  //   ->then([](auto x){
-  //     log() << x << std::endl;
-  //     return pvalue(x + " b", 500);
-  //   })
-  //   ->then([](auto x){
-  //     log() << x << std::endl;
-  //   })
-  //   ->finally([](){
-  //     log() << "#2 finally" << std::endl;
-  //   });
-  //   std::this_thread::sleep_for(std::chrono::seconds(2));
-  // }
-
-    // std::this_thread::sleep_for(std::chrono::seconds(100));
-
   {
     log() << "#1 start" << std::endl;
     auto p = pvalue<std::string>("#1 - a", 1000)
@@ -229,6 +208,23 @@ void test_5() {
   }
 }
 
+void test_6() {
+  Promise<>::create<int>([](auto resolver){
+    throw test_error("#1");
+  })
+  ->error([](std::exception_ptr err){
+    log() << error_to_string(err) << std::endl;
+  });
+
+  pvalue<int>(0)
+  ->then([](const auto& x){
+    throw test_error("#2");
+  })
+  ->error([](std::exception_ptr err){
+    log() << error_to_string(err) << std::endl;
+  });
+}
+
 int main()
 {
   log() << "================ test_1 ================" << std::endl;
@@ -245,4 +241,7 @@ int main()
 
   log() << "================ test_5 ================" << std::endl;
   test_5();
+
+  log() << "================ test_6 ================" << std::endl;
+  test_6();
 }

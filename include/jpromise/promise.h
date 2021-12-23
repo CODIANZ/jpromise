@@ -192,13 +192,20 @@ public:
     }
   };
 
+  /** internal use */
   virtual void remove_handler(PromiseBase* inst){
     guard lock(mtx_);
     handlers_.erase(inst);
   }
 
+  /** internal use */
   void execute(executor_fn executor) {
-    executor(resolver(shared_this()));
+    try{
+      executor(resolver(shared_this()));
+    }
+    catch(...){
+      on_rejected(std::current_exception());
+    }
   }
 
   const value_type& wait() {
@@ -226,8 +233,8 @@ public:
           try{
             resolver.resolve(func(value)->wait());
           }
-          catch(std::exception& e){
-            resolver.reject(std::make_exception_ptr(e));
+          catch(...){
+            resolver.reject(std::current_exception());
           }
         },
         .on_rejected = [resolver](std::exception_ptr err) {
@@ -304,8 +311,8 @@ public:
           try{
             resolver.resolve(func(err)->wait());
           }
-          catch(std::exception& e){
-            resolver.reject(std::make_exception_ptr(e));
+          catch(...){
+            resolver.reject(std::current_exception());
           }
         }
       });
@@ -375,8 +382,8 @@ public:
         try{
           resolver.resolve(func()->wait());
         }
-        catch(std::exception& e){
-          resolver.reject(std::make_exception_ptr(e));
+        catch(...){
+          resolver.reject(std::current_exception());
         }
       };
       THIS->add_handler(sink.get(), {
