@@ -117,6 +117,49 @@ public:
       all_impl(resolver, std::tuple<>(), args...);
     });
   }
+
+  template <typename PROMISE_SP, typename VALUE_TYPE = typename promise_sp_value_type<PROMISE_SP>::type>
+  static auto all(std::initializer_list<PROMISE_SP> list) -> typename Promise<std::vector<VALUE_TYPE>>::sp {
+    return Promise::create<std::vector<VALUE_TYPE>>([list](auto resolver){
+      auto results = std::make_shared<std::vector<VALUE_TYPE>>(list.size());
+      auto mtx = std::make_shared<std::mutex>();
+      auto bEmitted = std::make_shared<bool>(false);
+      auto nFulfilled = std::make_shared<int>(0);
+
+      auto i = 0;
+      for(auto p : list){
+        p->stand_alone({
+          .on_fulfilled = [resolver, i, results, mtx, bEmitted, nFulfilled](const auto& x){
+            auto bExecute = false;
+            {
+              std::lock_guard<std::mutex> lock(*mtx);
+              (*results)[i] = x;
+              if(!(*bEmitted)){
+                (*nFulfilled)++;
+                if((*nFulfilled) == results->size()){
+                  *bEmitted = true;
+                  bExecute = true;
+                }
+              }
+            }
+            if(bExecute) resolver.resolve(std::move(*results));
+          },
+          .on_rejected = [resolver, mtx, bEmitted](std::exception_ptr e){
+            auto bExecute = false;
+            {
+              std::lock_guard<std::mutex> lock(*mtx);
+              if(!(*bEmitted)){
+                *bEmitted = true;
+                bExecute = true;
+              }
+            }
+            if(bExecute) resolver.reject(e);
+          }
+        });
+        i++;
+      }
+    });
+  }
 };
 
 template<typename T> struct is_promise_sp : std::false_type {};
