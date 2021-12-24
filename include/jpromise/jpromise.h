@@ -160,6 +160,41 @@ public:
       }
     });
   }
+  
+  template <typename PROMISE_SP, typename VALUE_TYPE = typename promise_sp_value_type<PROMISE_SP>::type>
+  static auto race(std::initializer_list<PROMISE_SP> list) -> typename Promise<VALUE_TYPE>::sp {
+    return Promise::create<VALUE_TYPE>([list](auto resolver){
+      auto mtx = std::make_shared<std::mutex>();
+      auto bEmitted = std::make_shared<bool>(false);
+
+      for(auto p : list){
+        p->stand_alone({
+          .on_fulfilled = [resolver, mtx, bEmitted](const auto& x){
+            auto bExecute = false;
+            {
+              std::lock_guard<std::mutex> lock(*mtx);
+              if(!(*bEmitted)){
+                *bEmitted = true;
+                bExecute = true;
+              }
+            }
+            if(bExecute) resolver.resolve(x);
+          },
+          .on_rejected = [resolver, mtx, bEmitted](std::exception_ptr e){
+            auto bExecute = false;
+            {
+              std::lock_guard<std::mutex> lock(*mtx);
+              if(!(*bEmitted)){
+                *bEmitted = true;
+                bExecute = true;
+              }
+            }
+            if(bExecute) resolver.reject(e);
+          }
+        });
+      }
+    });
+  }
 };
 
 template<typename T> struct is_promise_sp : std::false_type {};

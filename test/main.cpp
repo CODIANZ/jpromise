@@ -345,6 +345,22 @@ void test_10() {
   }
 }
 
+void test_11() {
+  {
+    auto p1 = pvalue<std::string>("#1", 1000);
+    auto p2 = pvalue<std::string>("#2", 600);
+    auto p3 = pvalue<std::string>("#3", 400);
+
+    auto p = Promise<>::race({p1, p2, p3})
+    ->then([](const auto& x){
+      std::cout << x << std::endl;
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
+}
+
 int main()
 {
   log() << "================ test_1 ================" << std::endl;
@@ -376,4 +392,7 @@ int main()
 
   log() << "================ test_10 ================" << std::endl;
   test_10();
+
+  log() << "================ test_11 ================" << std::endl;
+  test_11();
 }
