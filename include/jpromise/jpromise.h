@@ -304,19 +304,19 @@ public:
 
   void stand_alone(handler h = {}) {
     auto THIS = shared_this();
-    std::thread([THIS, h]{
-      try{
-        const auto& value = THIS->wait();
+    auto sink = create_sink<value_type>();  /** dummy */
+    add_handler(sink.get(), {
+      .on_fulfilled = [THIS, sink, h](const value_type& value){
         if(h.on_fulfilled){
           h.on_fulfilled(value);
         }
-      }
-      catch(...){
+      },
+      .on_rejected = [THIS, sink, h](std::exception_ptr err) {
         if(h.on_rejected){
-          h.on_rejected(std::current_exception());
+          h.on_rejected(err);
         }
       }
-    }).detach();
+    });
   }
 
   template <typename F>
