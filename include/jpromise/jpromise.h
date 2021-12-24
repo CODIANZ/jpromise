@@ -85,6 +85,15 @@ private:
     using type = typename strip_const_referece<T>::type;
   };
 
+  /** fetch value type in Promise::sp* (for iterator) */
+  template<typename T> struct promise_iter_value_type{};
+  template<typename T> struct promise_iter_value_type<std::shared_ptr<Promise<T>>*> {
+    using type = typename strip_const_referece<T>::type;
+  };
+  template<typename T> struct promise_iter_value_type<const std::shared_ptr<Promise<T>>*> {
+    using type = typename strip_const_referece<T>::type;
+  };
+
   /** make tuple from Promise::sp parameteres */
   template <typename ...> struct make_value_tuple_impl;
 
@@ -142,10 +151,10 @@ public:
 private:
   /** implementation for the `all()` */
   template <typename RESOLVER, typename TUPLE, typename PROMISE_SP, typename ...ARGS>
-  static void all_impl(RESOLVER r, TUPLE t, PROMISE_SP p, ARGS...args) {
+  static void all_any_impl(RESOLVER r, TUPLE t, PROMISE_SP p, ARGS...args) {
     p->stand_alone({
       .on_fulfilled = [=](const auto& x){
-        all_impl(r, std::tuple_cat(t, std::forward_as_tuple(x)), args...);
+        all_any_impl(r, std::tuple_cat(t, std::forward_as_tuple(x)), args...);
       },
       .on_rejected = [=](std::exception_ptr e){
         r.reject(e);
@@ -154,7 +163,7 @@ private:
   }
 
   template <typename RESOLVER, typename TUPLE, typename PROMISE_SP>
-  static void all_impl(RESOLVER r, TUPLE t, PROMISE_SP p) {
+  static void all_any_impl(RESOLVER r, TUPLE t, PROMISE_SP p) {
     p->stand_alone({
       .on_fulfilled = [=](const auto& x){
         r.resolve(std::tuple_cat(t, std::forward_as_tuple(x)));
@@ -167,19 +176,19 @@ private:
 
 public:
   template <typename ...ARGS>
-  static auto all(ARGS...args) -> typename Promise<typename make_value_tuple<ARGS...>::type>::sp {
+  static auto all_any(ARGS...args) -> typename Promise<typename make_value_tuple<ARGS...>::type>::sp {
     using TUPLE_TYPE = typename make_value_tuple<ARGS...>::type;
     return Promise<>::create<TUPLE_TYPE>([=](auto resolver){
-      all_impl(resolver, std::tuple<>(), args...);
+      all_any_impl(resolver, std::tuple<>(), args...);
     });
   }
 
   template <typename PROMISE_SP, typename VALUE_TYPE = typename promise_sp_value_type<PROMISE_SP>::type>
   static auto all(std::initializer_list<PROMISE_SP> list) -> typename Promise<std::vector<VALUE_TYPE>>::sp {
-    return all<VALUE_TYPE>(std::begin(list), std::end(list));
+    return all(std::begin(list), std::end(list));
   }
 
-  template <typename VALUE_TYPE, typename ITER>
+  template <typename ITER, typename VALUE_TYPE = typename promise_iter_value_type<ITER>::type>
   static auto all(ITER it_begin, ITER it_end) -> typename Promise<std::vector<VALUE_TYPE>>::sp {
     return Promise::create<std::vector<VALUE_TYPE>>([it_begin, it_end](auto resolver){
       auto results = std::make_shared<std::vector<VALUE_TYPE>>(it_end - it_begin);

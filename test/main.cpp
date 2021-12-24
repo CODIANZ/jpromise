@@ -155,7 +155,6 @@ void test_4() {
   });
 }
 
-
 void test_5() {
   {
     log() << "#1 start" << std::endl;
@@ -325,7 +324,7 @@ void test_10() {
     auto p2 = pvalue<double>(1.23, 1200);
     auto p3 = pvalue<std::string>("abc", 500);
 
-    auto p = Promise<>::all(p1, p2, p3)
+    auto p = Promise<>::all_any(p1, p2, p3)
     ->then([](const auto& x){ /* x = std::tuple<int, double, std::string> */
       std::cout << std::get<0>(x) << std::endl; /** int 1 */
       std::cout << std::get<1>(x) << std::endl; /** double 1.23 */
@@ -359,7 +358,7 @@ void test_10() {
     for(int i = 0; i < arr.size(); i++){
       arr[i] = pvalue(i, 1000);
     }
-    auto p = Promise<>::all<int>(arr.begin(), arr.end())
+    auto p = Promise<>::all(arr.begin(), arr.end())
     ->then([](const auto& x){
       for(auto n : x){
         std::cout << n << std::endl;
