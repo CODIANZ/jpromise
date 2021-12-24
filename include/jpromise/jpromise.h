@@ -18,6 +18,58 @@ enum class PromiseState {pending, fulfilled, rejected};
 
 template <typename T = void> class Promise;
 
+class PromiseBase : public std::enable_shared_from_this<PromiseBase> {
+public:
+  using sp = std::shared_ptr<PromiseBase>;
+
+private:
+  const std::vector<PromiseBase::sp> upstream_;
+  std::vector<PromiseBase::sp> upstream() {
+    auto u = upstream_;
+    u.push_back(shared_base()); /** add self instance */
+    return std::move(u);
+  }
+  PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
+
+protected:
+  using mtx         = std::mutex;
+  using guard       = std::lock_guard<mtx>;
+  using ulock       = std::unique_lock<mtx>;
+
+  mtx                     mtx_;
+  std::condition_variable cond_;
+  PromiseState                   state_ = PromiseState::pending;
+  std::exception_ptr      error_ = nullptr;
+
+  sp shared_base() { return shared_from_this(); }
+
+  template <typename T> std::shared_ptr<Promise<T>> shared_this_as() {
+    return std::dynamic_pointer_cast<Promise<T>>(shared_from_this());
+  }
+
+  virtual void remove_handler(PromiseBase*) = 0;
+
+  template <typename SINK> typename Promise<SINK>::sp create_sink() {
+    return std::shared_ptr<Promise<SINK>>(new Promise<SINK>(shared_base()));
+  }
+
+  template<typename SINK> void execute_sink(typename Promise<SINK>::sp sink, typename Promise<SINK>::executor_fn executor){
+    sink->execute(executor);
+  }
+
+  PromiseBase() = default;
+  PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
+
+public:
+  virtual ~PromiseBase(){
+    auto source = above();
+    if(source){
+      source->remove_handler(this);
+    }
+  }
+  PromiseState state() const { return state_; }
+};
+
 template <> class Promise<void> {
 private:
   struct never {};
@@ -230,62 +282,93 @@ public:
       resolver.resolve(results);
     });
   }
+
+public:
+  template <typename PROMISE_SP, typename VALUE_TYPE = std::vector<PromiseState>>
+  static auto all_settled(std::initializer_list<PROMISE_SP> list) -> typename Promise<VALUE_TYPE>::sp {
+    return all_settled(std::begin(list), std::end(list));
+  }
+
+  template <typename ITER, typename VALUE_TYPE = std::vector<PromiseState>>
+  static auto all_settled(ITER it_begin, ITER it_end) -> typename Promise<VALUE_TYPE>::sp {
+    return Promise::create<VALUE_TYPE>([it_begin, it_end](auto resolver){
+      auto results = std::make_shared<VALUE_TYPE>(it_end - it_begin);
+      auto mtx = std::make_shared<std::mutex>();
+      auto nEmitted = std::make_shared<int>(0);
+
+      auto i = 0;
+      for(auto it = it_begin; it != it_end; it++, i++){
+        (*it)->stand_alone({
+          .on_fulfilled = [resolver, i, results, mtx, nEmitted](const auto&){
+            auto bExecute = false;
+            {
+              std::lock_guard<std::mutex> lock(*mtx);
+              (*results)[i] = PromiseState::fulfilled;
+              (*nEmitted)++;
+              if((*nEmitted) == results->size()){
+                bExecute = true;
+              }
+            }
+            if(bExecute) resolver.resolve(std::move(*results));
+          },
+          .on_rejected = [resolver, i, results, mtx, nEmitted](std::exception_ptr e){
+            auto bExecute = false;
+            {
+              std::lock_guard<std::mutex> lock(*mtx);
+              (*results)[i] = PromiseState::rejected;
+              (*nEmitted)++;
+              if((*nEmitted) == results->size()){
+                bExecute = true;
+              }
+            }
+            if(bExecute) resolver.resolve(std::move(*results));
+          }
+        });
+      }
+    });
+  }
+
+private:
+  template <typename RESOLVER, typename ARRAY_SP, typename PROMISE_SP, typename ...ARGS>
+  static void all_settled_any_impl(RESOLVER r, ARRAY_SP arr, const std::size_t n, PROMISE_SP p, ARGS ...args) {
+    p->stand_alone({
+      .on_fulfilled = [=](const auto&){
+        (*arr)[n] = PromiseState::fulfilled;
+        all_settled_any_impl(r, arr, n + 1, args...);
+      },
+      .on_rejected = [=](std::exception_ptr e){
+        (*arr)[n] = PromiseState::rejected;
+        all_settled_any_impl(r, arr, n + 1, args...);
+      }
+    });
+  }
+
+  template <typename RESOLVER, typename ARRAY_SP, typename PROMISE_SP>
+  static void all_settled_any_impl(RESOLVER r, ARRAY_SP arr, const std::size_t n, PROMISE_SP p) {
+    p->stand_alone({
+      .on_fulfilled = [=](const auto&){
+        (*arr)[n] = PromiseState::fulfilled;
+        r.resolve(std::move(*arr));
+      },
+      .on_rejected = [=](std::exception_ptr e){
+        (*arr)[n] = PromiseState::rejected;
+        r.resolve(std::move(*arr));
+      }
+    });
+  }
+
+public:
+  template <typename ...ARGS, typename VALUE_TYPE = std::array<PromiseState, sizeof...(ARGS)>>
+  static auto all_settled_any(ARGS ...args) -> typename Promise<VALUE_TYPE>::sp {
+    return Promise<>::create<VALUE_TYPE>([=](auto resolver){
+      auto arr = std::make_shared<VALUE_TYPE>();
+      all_settled_any_impl(resolver, arr, 0, args...);
+    });
+  }
 };
 
 template<typename T> struct is_promise_sp : std::false_type {};
 template<typename T> struct is_promise_sp<std::shared_ptr<Promise<T>>> : std::true_type {};
-
-class PromiseBase : public std::enable_shared_from_this<PromiseBase> {
-public:
-  using sp = std::shared_ptr<PromiseBase>;
-
-private:
-  const std::vector<PromiseBase::sp> upstream_;
-  std::vector<PromiseBase::sp> upstream() {
-    auto u = upstream_;
-    u.push_back(shared_base()); /** add self instance */
-    return std::move(u);
-  }
-  PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
-
-protected:
-  using mtx         = std::mutex;
-  using guard       = std::lock_guard<mtx>;
-  using ulock       = std::unique_lock<mtx>;
-
-  mtx                     mtx_;
-  std::condition_variable cond_;
-  PromiseState                   state_ = PromiseState::pending;
-  std::exception_ptr      error_ = nullptr;
-
-  sp shared_base() { return shared_from_this(); }
-
-  template <typename T> std::shared_ptr<Promise<T>> shared_this_as() {
-    return std::dynamic_pointer_cast<Promise<T>>(shared_from_this());
-  }
-
-  virtual void remove_handler(PromiseBase*) = 0;
-
-  template <typename SINK> typename Promise<SINK>::sp create_sink() {
-    return std::shared_ptr<Promise<SINK>>(new Promise<SINK>(shared_base()));
-  }
-
-  template<typename SINK> void execute_sink(typename Promise<SINK>::sp sink, typename Promise<SINK>::executor_fn executor){
-    sink->execute(executor);
-  }
-
-  PromiseBase() = default;
-  PromiseBase(PromiseBase::sp source) : upstream_(source->upstream()) {}
-
-public:
-  virtual ~PromiseBase(){
-    auto source = above();
-    if(source){
-      source->remove_handler(this);
-    }
-  }
-  PromiseState state() const { return state_; }
-};
 
 template <typename T> class Promise : public PromiseBase {
 friend class Promise<>;

@@ -57,6 +57,14 @@ template <typename T> typename Promise<T>::sp perror(const std::string& text, in
   });
 }
 
+auto state_to_string(PromiseState state) {
+  switch(state){
+    case PromiseState::pending:   return "pending";
+    case PromiseState::fulfilled: return "fulfilled";
+    case PromiseState::rejected:  return "rejected";
+  }
+};
+
 void test_1() {
   pvalue(1)
   ->then([](const auto& x){
@@ -371,7 +379,7 @@ void test_11() {
 
     auto p = Promise<>::race({p1, p2, p3})
     ->then([](const auto& x){
-      std::cout << x << std::endl;  /* x = "#3" */
+      log() << x << std::endl;  /* x = "#3" */
     });
 
     log() << "wait 2 sec" << std::endl;
@@ -385,7 +393,7 @@ void test_11() {
     }
     auto p = Promise<>::race<int>(arr.begin(), arr.end())
     ->then([](const auto& x){
-      std::cout << x << std::endl; /* x = random */
+      log() << x << std::endl; /* x = random */
     });
 
     log() << "wait 2 sec" << std::endl;
@@ -393,32 +401,61 @@ void test_11() {
   }
 }
 
-
 void test_12() {
-  auto state_to_string = [](PromiseState state) {
-    switch(state){
-      case PromiseState::pending:   return "pending";
-      case PromiseState::fulfilled: return "fulfilled";
-      case PromiseState::rejected:  return "rejected";
-    }
-  };
+  auto p1 = pvalue<std::string>("#1", 100);
+  auto p2 = pvalue<std::string>("#2", 600);
+  auto p3 = pvalue<std::string>("#3", 300);
 
+  for(int i = 0; i < 10; i++){
+    auto x =  Promise<>::states(p1, p2, p3)
+    ->wait();
+    for(auto it = x.begin(); it != x.end(); it++){
+      std::cout << state_to_string(*it) << ", ";
+    }
+    std::cout << std::endl;
+
+    log() << "wait 100 ms" << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+
+void test_13() {
   {
-    auto p1 = pvalue<std::string>("#1", 100);
-    auto p2 = pvalue<std::string>("#2", 600);
-    auto p3 = pvalue<std::string>("#3", 300);
-
-    for(int i = 0; i < 10; i++){
-      auto x =  Promise<>::states(p1, p2, p3)
-      ->wait();
-      for(auto it = x.begin(); it != x.end(); it++){
-        log() << state_to_string(*it) << ", ";
-      }
-      std::cout << std::endl;
-
-      log() << "wait 100 ms" << std::endl;
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::array<Promise<int>::sp, 10> arr;
+    for(int i = 0; i < arr.size(); i++){
+      arr[i] = i % 3 == 0 ? pvalue(i, 1000) : perror<int>("error", i * 100);
     }
+
+    std::stringstream ss;
+    auto p = Promise<>::all_settled(arr.begin(), arr.end())
+    ->then([&](const auto& x){
+      for(auto it = x.begin(); it != x.end(); it++){
+        ss << state_to_string(*it) << ", ";
+      }
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    log() << ss.str() << std::endl;
+  }
+  {
+    auto p1 = pvalue<std::string>("abc", 100);
+    auto p2 = pvalue(1, 600);
+    auto p3 = pvalue(1.23, 300);
+    auto p4 = perror<int>("error", 200);
+    auto p5 = pvalue(true, 800);
+
+    std::stringstream ss;
+    auto p = Promise<>::all_settled_any(p1, p2, p3, p4, p5)
+    ->then([&](const auto& x){
+      for(auto it = x.begin(); it != x.end(); it++){
+        ss << state_to_string(*it) << ", ";
+      }
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    log() << ss.str();
   }
 }
 
@@ -459,4 +496,7 @@ int main()
 
   log() << "================ test_12 ================" << std::endl;
   test_12();
+
+  log() << "================ test_13 ================" << std::endl;
+  test_13();
 }
