@@ -131,3 +131,24 @@ void test_7() {
 0x70000f717000 : 5
 0x11ccfae00 : result = 5
 ```
+
+
+#### Promise.all()
+
+```cpp
+void test_10() {
+  auto p1 = pvalue(1, 1000);
+  auto p2 = pvalue<double>(1.23, 1000);
+  auto p3 = pvalue<std::string>("abc", 1000);
+
+  auto p = Promise<>::all(p1, p2, p3)
+  ->then([](const auto& x){ /* x = std::tuple<int, double, std::string> */
+    std::cout << std::get<0>(x) << std::endl; /** int 1 */
+    std::cout << std::get<1>(x) << std::endl; /** double 1.23 */
+    std::cout << std::get<2>(x) << std::endl; /** string "abc" */
+  });
+
+  log() << "wait 2 sec" << std::endl;
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+}
+```
