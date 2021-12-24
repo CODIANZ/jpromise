@@ -1,5 +1,6 @@
 #include <iostream>
 #include <sstream>
+#include <array>
 #include <jpromise/jpromise.h>
 
 using namespace JPromise;
@@ -8,7 +9,7 @@ std::ostream& log() {
   return std::cout << std::this_thread::get_id() << " : ";
 }
 
-void heavy(std::function<void()> f, int x) {
+void setTimeout(std::function<void()> f, int x) {
   auto t = std::thread([f, x]{
     std::this_thread::sleep_for(std::chrono::milliseconds(x));
     f();
@@ -16,13 +17,14 @@ void heavy(std::function<void()> f, int x) {
   t.detach();
 }
 
-template <typename T> typename Promise<T>::sp pvalue(T&& value, int delay = 0) {
-  using TT = typename std::remove_const<typename std::remove_reference<T>::type>::type;
-  return Promise<>::create<TT>([&value, delay](auto resolver) {
-    if(delay == 0) resolver.resolve(std::forward<T>(value));
+template <typename T, typename TT = typename std::remove_const<typename std::remove_reference<T>::type>::type>
+auto pvalue(T&& value, int delay = 0) -> typename Promise<TT>::sp {
+  auto _value = std::forward<T>(value);
+  return Promise<>::create<TT>([&_value, delay](auto resolver) {
+    if(delay == 0) resolver.resolve(_value);
     else{
-      heavy([resolver, value]() {
-        resolver.resolve(std::move(value));
+      setTimeout([resolver, _value]() {
+        resolver.resolve(std::move(_value));
       }, delay);
     }
   });
@@ -48,7 +50,7 @@ template <typename T> typename Promise<T>::sp perror(const std::string& text, in
   return Promise<>::create<T>([delay, err](auto resolver)  {
     if(delay == 0) resolver.reject(err);
     else{
-      heavy([resolver, err]() {
+      setTimeout([resolver, err]() {
         resolver.reject(err);
       }, delay);
     }
@@ -343,6 +345,22 @@ void test_10() {
     log() << "wait 2 sec" << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(2));
   }
+
+  {
+    std::array<Promise<int>::sp, 10> arr;
+    for(int i = 0; i < arr.size(); i++){
+      arr[i] = pvalue(i, 1000);
+    }
+    auto p = Promise<>::all<int>(arr.begin(), arr.end())
+    ->then([](const auto& x){
+      for(auto n : x){
+        std::cout << n << std::endl;
+      }
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
 }
 
 void test_11() {
@@ -353,7 +371,21 @@ void test_11() {
 
     auto p = Promise<>::race({p1, p2, p3})
     ->then([](const auto& x){
-      std::cout << x << std::endl;
+      std::cout << x << std::endl;  /* x = "#3" */
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
+
+  {
+    std::array<Promise<int>::sp, 10> arr;
+    for(int i = 0; i < arr.size(); i++){
+      arr[i] = pvalue(i, 1000);
+    }
+    auto p = Promise<>::race<int>(arr.begin(), arr.end())
+    ->then([](const auto& x){
+      std::cout << x << std::endl; /* x = random */
     });
 
     log() << "wait 2 sec" << std::endl;

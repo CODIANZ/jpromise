@@ -120,15 +120,20 @@ public:
 
   template <typename PROMISE_SP, typename VALUE_TYPE = typename promise_sp_value_type<PROMISE_SP>::type>
   static auto all(std::initializer_list<PROMISE_SP> list) -> typename Promise<std::vector<VALUE_TYPE>>::sp {
-    return Promise::create<std::vector<VALUE_TYPE>>([list](auto resolver){
-      auto results = std::make_shared<std::vector<VALUE_TYPE>>(list.size());
+    return all<VALUE_TYPE>(std::begin(list), std::end(list));
+  }
+
+  template <typename VALUE_TYPE, typename ITER>
+  static auto all(ITER it_begin, ITER it_end) -> typename Promise<std::vector<VALUE_TYPE>>::sp {
+    return Promise::create<std::vector<VALUE_TYPE>>([it_begin, it_end](auto resolver){
+      auto results = std::make_shared<std::vector<VALUE_TYPE>>(it_end - it_begin);
       auto mtx = std::make_shared<std::mutex>();
       auto bEmitted = std::make_shared<bool>(false);
       auto nFulfilled = std::make_shared<int>(0);
 
       auto i = 0;
-      for(auto p : list){
-        p->stand_alone({
+      for(auto it = it_begin; it != it_end; it++, i++){
+        (*it)->stand_alone({
           .on_fulfilled = [resolver, i, results, mtx, bEmitted, nFulfilled](const auto& x){
             auto bExecute = false;
             {
@@ -156,19 +161,23 @@ public:
             if(bExecute) resolver.reject(e);
           }
         });
-        i++;
       }
     });
   }
-  
+
   template <typename PROMISE_SP, typename VALUE_TYPE = typename promise_sp_value_type<PROMISE_SP>::type>
   static auto race(std::initializer_list<PROMISE_SP> list) -> typename Promise<VALUE_TYPE>::sp {
-    return Promise::create<VALUE_TYPE>([list](auto resolver){
+    return race<VALUE_TYPE>(std::begin(list), std::end(list));
+  }
+
+  template <typename VALUE_TYPE, typename ITER>
+  static auto race(ITER it_begin, ITER it_end) -> typename Promise<VALUE_TYPE>::sp {
+    return Promise::create<VALUE_TYPE>([it_begin, it_end](auto resolver){
       auto mtx = std::make_shared<std::mutex>();
       auto bEmitted = std::make_shared<bool>(false);
 
-      for(auto p : list){
-        p->stand_alone({
+      for(auto it = it_begin; it != it_end; it++){
+        (*it)->stand_alone({
           .on_fulfilled = [resolver, mtx, bEmitted](const auto& x){
             auto bExecute = false;
             {
