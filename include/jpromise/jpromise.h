@@ -62,17 +62,6 @@ private:
     >::type;
   };
 
-  /** implementation for the `all()` */
-  template <typename PROMISE_SP, typename ...ARGS>
-  static auto all_impl(PROMISE_SP p, ARGS...args) {
-    return std::tuple_cat(std::forward_as_tuple(p->wait()), all_impl(args...));
-  }
-
-  template <typename PROMISE_SP>
-  static auto all_impl(PROMISE_SP p) {
-    return std::forward_as_tuple(p->wait());
-  }
-
 public:
   template <typename T> static typename Promise<T>::sp create(typename Promise<T>::executor_fn executer) {
     auto p = std::shared_ptr<Promise<T>>(new Promise<T>());
@@ -94,16 +83,38 @@ public:
     return p;
   }
 
+private:
+  /** implementation for the `all()` */
+  template <typename RESOLVER, typename TUPLE, typename PROMISE_SP, typename ...ARGS>
+  static void all_impl(RESOLVER r, TUPLE t, PROMISE_SP p, ARGS...args) {
+    p->stand_alone({
+      .on_fulfilled = [=](const auto& x){
+        all_impl(r, std::tuple_cat(t, std::forward_as_tuple(x)), args...);
+      },
+      .on_rejected = [=](std::exception_ptr e){
+        r.reject(e);
+      }
+    });
+  }
+
+  template <typename RESOLVER, typename TUPLE, typename PROMISE_SP>
+  static void all_impl(RESOLVER r, TUPLE t, PROMISE_SP p) {
+    p->stand_alone({
+      .on_fulfilled = [=](const auto& x){
+        r.resolve(std::tuple_cat(t, std::forward_as_tuple(x)));
+      },
+      .on_rejected = [=](std::exception_ptr e){
+        r.reject(e);
+      }
+    });
+  }
+
+public:
   template <typename ...ARGS>
   static auto all(ARGS...args) -> typename Promise<typename make_value_tuple<ARGS...>::type>::sp {
-    using result_value = typename make_value_tuple<ARGS...>::type;
-    return Promise<>::create<result_value>([=](auto resolver){
-      try{
-        resolver.resolve(all_impl(args...));
-      }
-      catch(...){
-        resolver.reject(std::current_exception());
-      }
+    using TUPLE_TYPE = typename make_value_tuple<ARGS...>::type;
+    return Promise<>::create<TUPLE_TYPE>([=](auto resolver){
+      all_impl(resolver, std::tuple<>(), args...);
     });
   }
 };
