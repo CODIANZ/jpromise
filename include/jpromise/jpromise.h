@@ -18,6 +18,50 @@ template <> class Promise<void> {
 private:
   struct never {};
 
+  /** strip const and reference */
+  template <typename T> struct strip_const_referece {
+    using type = typename std::remove_const<typename std::remove_reference<T>::type>::type;
+  };
+
+  /** fetch value type in Promise::sp */
+  template<typename T> struct promise_sp_value_type {};
+  template<typename T> struct promise_sp_value_type<std::shared_ptr<Promise<T>>> {
+    using type = typename strip_const_referece<T>::type;
+  };
+
+  /** make tuple from Promise::sp parameteres */
+  template <typename ...> struct make_value_tuple_impl;
+
+  template <typename ...TUPLE_ELEMENTS, typename PROMISE_SP, typename ...ARGS>
+    struct make_value_tuple_impl<std::tuple<TUPLE_ELEMENTS...>, PROMISE_SP, ARGS...>
+  {
+    using type = typename make_value_tuple_impl<
+      std::tuple<
+        TUPLE_ELEMENTS...,
+        typename promise_sp_value_type<PROMISE_SP>::type
+      >,
+      ARGS...
+    >::type;
+  };
+
+  template <typename ...TUPLE_ELEMENTS, typename PROMISE_SP>
+  struct make_value_tuple_impl<std::tuple<TUPLE_ELEMENTS...>, PROMISE_SP>
+  {
+    using type = std::tuple<
+      TUPLE_ELEMENTS...,
+      typename promise_sp_value_type<PROMISE_SP>::type
+    >;
+  };
+
+  template <typename ...ARGS>
+  struct make_value_tuple
+  {
+    using type = typename make_value_tuple_impl<
+      std::tuple<>,
+      ARGS...
+    >::type;
+  };
+
 public:
   template <typename T> static typename Promise<T>::sp create(typename Promise<T>::executor_fn executer) {
     auto p = std::shared_ptr<Promise<T>>(new Promise<T>());
@@ -25,7 +69,7 @@ public:
     return p;
   }
 
-  template <typename T, typename TT = typename std::remove_const<typename std::remove_reference<T>::type>::type>
+  template <typename T, typename TT = typename strip_const_referece<T>::type>
   static typename Promise<TT>::sp resolve(T&& value) {
     auto p = std::shared_ptr<Promise<TT>>(new Promise<TT>());
     p->on_fulfilled(std::forward<T>(value));
@@ -37,6 +81,41 @@ public:
     auto p = std::shared_ptr<Promise<T>>(new Promise<T>());
     p->on_rejected(err);
     return p;
+  }
+
+private:
+  /** implementation for the `all()` */
+  template <typename RESOLVER, typename TUPLE, typename PROMISE_SP, typename ...ARGS>
+  static void all_impl(RESOLVER r, TUPLE t, PROMISE_SP p, ARGS...args) {
+    p->stand_alone({
+      .on_fulfilled = [=](const auto& x){
+        all_impl(r, std::tuple_cat(t, std::forward_as_tuple(x)), args...);
+      },
+      .on_rejected = [=](std::exception_ptr e){
+        r.reject(e);
+      }
+    });
+  }
+
+  template <typename RESOLVER, typename TUPLE, typename PROMISE_SP>
+  static void all_impl(RESOLVER r, TUPLE t, PROMISE_SP p) {
+    p->stand_alone({
+      .on_fulfilled = [=](const auto& x){
+        r.resolve(std::tuple_cat(t, std::forward_as_tuple(x)));
+      },
+      .on_rejected = [=](std::exception_ptr e){
+        r.reject(e);
+      }
+    });
+  }
+
+public:
+  template <typename ...ARGS>
+  static auto all(ARGS...args) -> typename Promise<typename make_value_tuple<ARGS...>::type>::sp {
+    using TUPLE_TYPE = typename make_value_tuple<ARGS...>::type;
+    return Promise<>::create<TUPLE_TYPE>([=](auto resolver){
+      all_impl(resolver, std::tuple<>(), args...);
+    });
   }
 };
 
@@ -225,19 +304,19 @@ public:
 
   void stand_alone(handler h = {}) {
     auto THIS = shared_this();
-    std::thread([THIS, h]{
-      try{
-        const auto& value = THIS->wait();
+    auto sink = create_sink<value_type>();  /** dummy */
+    add_handler(sink.get(), {
+      .on_fulfilled = [THIS, sink, h](const value_type& value){
         if(h.on_fulfilled){
           h.on_fulfilled(value);
         }
-      }
-      catch(...){
+      },
+      .on_rejected = [THIS, sink, h](std::exception_ptr err) {
         if(h.on_rejected){
-          h.on_rejected(std::current_exception());
+          h.on_rejected(err);
         }
       }
-    }).detach();
+    });
   }
 
   template <typename F>

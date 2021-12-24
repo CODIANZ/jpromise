@@ -309,6 +309,25 @@ void test_9() {
   std::this_thread::sleep_for(std::chrono::seconds(2));
 }
 
+void test_10() {
+  auto p1 = pvalue(1, 900);
+  auto p2 = pvalue<double>(1.23, 1200);
+  auto p3 = pvalue<std::string>("abc", 500);
+
+  auto p = Promise<>::all(p1, p2, p3)
+  ->then([](const auto& x){ /* x = std::tuple<int, double, std::string> */
+    std::cout << std::get<0>(x) << std::endl; /** int 1 */
+    std::cout << std::get<1>(x) << std::endl; /** double 1.23 */
+    std::cout << std::get<2>(x) << std::endl; /** string "abc" */
+    assert(std::get<0>(x) == 1);
+    assert(std::get<1>(x) == 1.23);
+    assert(std::get<2>(x) == "abc");
+  });
+
+  log() << "wait 2 sec" << std::endl;
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+}
+
 int main()
 {
   log() << "================ test_1 ================" << std::endl;
@@ -337,4 +356,7 @@ int main()
 
   log() << "================ test_9 ================" << std::endl;
   test_9();
+
+  log() << "================ test_10 ================" << std::endl;
+  test_10();
 }
