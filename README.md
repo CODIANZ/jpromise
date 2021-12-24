@@ -143,7 +143,7 @@ void test_10() {
     auto p2 = pvalue<double>(1.23, 1200);
     auto p3 = pvalue<std::string>("abc", 500);
 
-    auto p = Promise<>::all(p1, p2, p3)
+    auto p = Promise<>::all_any(p1, p2, p3)
     ->then([](const auto& x){ /* x = std::tuple<int, double, std::string> */
       std::cout << std::get<0>(x) << std::endl; /** int 1 */
       std::cout << std::get<1>(x) << std::endl; /** double 1.23 */
@@ -177,7 +177,7 @@ void test_10() {
     for(int i = 0; i < arr.size(); i++){
       arr[i] = pvalue(i, 1000);
     }
-    auto p = Promise<>::all<int>(arr.begin(), arr.end())
+    auto p = Promise<>::all(arr.begin(), arr.end())
     ->then([](const auto& x){
       for(auto n : x){
         std::cout << n << std::endl;
@@ -220,6 +220,50 @@ void test_11() {
 
     log() << "wait 2 sec" << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
+}
+```
+
+#### Promise.allSettled()
+
+```cpp
+void test_13() {
+  {
+    std::array<Promise<int>::sp, 10> arr;
+    for(int i = 0; i < arr.size(); i++){
+      arr[i] = i % 3 == 0 ? pvalue(i, 1000) : perror<int>("error", i * 100);
+    }
+
+    std::stringstream ss;
+    auto p = Promise<>::all_settled(arr.begin(), arr.end())
+    ->then([&](const auto& x){
+      for(auto it = x.begin(); it != x.end(); it++){
+        ss << state_to_string(*it) << ", ";
+      }
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    log() << ss.str() << std::endl;
+  }
+  {
+    auto p1 = pvalue<std::string>("abc", 100);
+    auto p2 = pvalue(1, 600);
+    auto p3 = pvalue(1.23, 300);
+    auto p4 = perror<int>("error", 200);
+    auto p5 = pvalue(true, 800);
+
+    std::stringstream ss;
+    auto p = Promise<>::all_settled_any(p1, p2, p3, p4, p5)
+    ->then([&](const auto& x){
+      for(auto it = x.begin(); it != x.end(); it++){
+        ss << state_to_string(*it) << ", ";
+      }
+    });
+
+    log() << "wait 2 sec" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    log() << ss.str();
   }
 }
 ```
