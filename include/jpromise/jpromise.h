@@ -18,6 +18,61 @@ template <> class Promise<void> {
 private:
   struct never {};
 
+  /** strip const and reference */
+  template <typename T> struct strip_const_referece {
+    using type = typename std::remove_const<typename std::remove_reference<T>::type>::type;
+  };
+
+  /** fetch value type in Promise::sp */
+  template<typename T> struct promise_sp_value_type {};
+  template<typename T> struct promise_sp_value_type<std::shared_ptr<Promise<T>>> {
+    using type = typename strip_const_referece<T>::type;
+  };
+
+  /** make tuple from Promise::sp parameteres */
+  template <typename ...> struct make_value_tuple_impl;
+
+  template <typename ...TUPLE_ELEMENTS, typename PROMISE_SP, typename ...ARGS>
+    struct make_value_tuple_impl<std::tuple<TUPLE_ELEMENTS...>, PROMISE_SP, ARGS...>
+  {
+    using type = typename make_value_tuple_impl<
+      std::tuple<
+        TUPLE_ELEMENTS...,
+        typename promise_sp_value_type<PROMISE_SP>::type
+      >,
+      ARGS...
+    >::type;
+  };
+
+  template <typename ...TUPLE_ELEMENTS, typename PROMISE_SP>
+  struct make_value_tuple_impl<std::tuple<TUPLE_ELEMENTS...>, PROMISE_SP>
+  {
+    using type = std::tuple<
+      TUPLE_ELEMENTS...,
+      typename promise_sp_value_type<PROMISE_SP>::type
+    >;
+  };
+
+  template <typename ...ARGS>
+  struct make_value_tuple
+  {
+    using type = typename make_value_tuple_impl<
+      std::tuple<>,
+      ARGS...
+    >::type;
+  };
+
+  /** implementation for the `all()` */
+  template <typename PROMISE_SP, typename ...ARGS>
+  static auto all_impl(PROMISE_SP p, ARGS...args) {
+    return std::tuple_cat(std::forward_as_tuple(p->wait()), all_impl(args...));
+  }
+
+  template <typename PROMISE_SP>
+  static auto all_impl(PROMISE_SP p) {
+    return std::forward_as_tuple(p->wait());
+  }
+
 public:
   template <typename T> static typename Promise<T>::sp create(typename Promise<T>::executor_fn executer) {
     auto p = std::shared_ptr<Promise<T>>(new Promise<T>());
@@ -25,7 +80,7 @@ public:
     return p;
   }
 
-  template <typename T, typename TT = typename std::remove_const<typename std::remove_reference<T>::type>::type>
+  template <typename T, typename TT = typename strip_const_referece<T>::type>
   static typename Promise<TT>::sp resolve(T&& value) {
     auto p = std::shared_ptr<Promise<TT>>(new Promise<TT>());
     p->on_fulfilled(std::forward<T>(value));
@@ -37,6 +92,19 @@ public:
     auto p = std::shared_ptr<Promise<T>>(new Promise<T>());
     p->on_rejected(err);
     return p;
+  }
+
+  template <typename ...ARGS>
+  static auto all(ARGS...args) -> typename Promise<typename make_value_tuple<ARGS...>::type>::sp {
+    using result_value = typename make_value_tuple<ARGS...>::type;
+    return Promise<>::create<result_value>([=](auto resolver){
+      try{
+        resolver.resolve(all_impl(args...));
+      }
+      catch(...){
+        resolver.reject(std::current_exception());
+      }
+    });
   }
 };
 
