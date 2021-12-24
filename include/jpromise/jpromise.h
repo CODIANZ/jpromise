@@ -8,9 +8,13 @@
 #include <future>
 #include <type_traits>
 #include <queue>
+#include <array>
+#include <vector>
 #include <unordered_map>
 
 namespace JPromise {
+
+enum class PromiseState {pending, fulfilled, rejected};
 
 template <typename T = void> class Promise;
 
@@ -204,6 +208,28 @@ public:
       }
     });
   }
+
+private:
+  template <typename ARRAY, typename PROMISE_SP, typename ...ARGS>
+  static void states_impl(ARRAY& results, const std::size_t n, PROMISE_SP p, ARGS ...args) {
+    results[n] = p->state();
+    states_impl(results, n + 1, args...);
+  }
+
+  template <typename ARRAY, typename PROMISE_SP>
+  static void states_impl(ARRAY& results, const std::size_t n, PROMISE_SP p) {
+    results[n] = p->state();
+  }
+
+public:
+  template <typename ...ARGS>
+  static auto states(ARGS ...args) -> typename Promise<std::array<PromiseState, sizeof...(args)>>::sp {
+    return Promise<>::create<std::array<PromiseState, sizeof...(args)>>([=](auto resolver){
+      std::array<PromiseState, sizeof...(args)> results;
+      states_impl(results, 0, args...);
+      resolver.resolve(results);
+    });
+  }
 };
 
 template<typename T> struct is_promise_sp : std::false_type {};
@@ -223,15 +249,13 @@ private:
   PromiseBase::sp above() { return upstream_.size() > 0 ? upstream_.back() : PromiseBase::sp(); }
 
 protected:
-  enum class state {pending, fulfilled, rejected};
-
   using mtx         = std::mutex;
   using guard       = std::lock_guard<mtx>;
   using ulock       = std::unique_lock<mtx>;
 
   mtx                     mtx_;
   std::condition_variable cond_;
-  state                   state_ = state::pending;
+  PromiseState                   state_ = PromiseState::pending;
   std::exception_ptr      error_ = nullptr;
 
   sp shared_base() { return shared_from_this(); }
@@ -260,6 +284,7 @@ public:
       source->remove_handler(this);
     }
   }
+  PromiseState state() const { return state_; }
 };
 
 template <typename T> class Promise : public PromiseBase {
@@ -307,17 +332,17 @@ private:
   }
 
   void add_handler(PromiseBase* base, handler h){
-    const state s = [&](){
+    const enum PromiseState s = [&](){
       guard lock(mtx_);
-      if(state_ == state::pending){
+      if(state_ == PromiseState::pending){
         handlers_.insert({base, h});
       }
       return state_;
     }();
-    if(s == state::fulfilled){
+    if(s == PromiseState::fulfilled){
       if(h.on_fulfilled) h.on_fulfilled(value_);
     }
-    else if(s == state::rejected){
+    else if(s == PromiseState::rejected){
       if(h.on_rejected) h.on_rejected(error_);
     }
   }
@@ -335,8 +360,8 @@ private:
   void on_fulfilled(U&& value) {
     {
       guard lock(mtx_);
-      assert(state_ == state::pending);
-      state_ = state::fulfilled;
+      assert(state_ == PromiseState::pending);
+      state_ = PromiseState::fulfilled;
       value_ = std::forward<U>(value);
       cond_.notify_all();
     }
@@ -349,8 +374,8 @@ private:
   void on_rejected(std::exception_ptr err) {
     {
       guard lock(mtx_);
-      assert(state_ == state::pending);
-      state_ = state::rejected;
+      assert(state_ == PromiseState::pending);
+      state_ = PromiseState::rejected;
       error_ = err;
       cond_.notify_all();
     }
@@ -384,8 +409,8 @@ public:
     std::mutex mtx;
     std::unique_lock<std::mutex> lock(mtx);
     auto THIS = shared_this();
-    cond_.wait(lock, [THIS]{ return THIS->state_ != state::pending; });
-    if(state_ == state::rejected) std::rethrow_exception(error_);
+    cond_.wait(lock, [THIS]{ return THIS->state_ != PromiseState::pending; });
+    if(state_ == PromiseState::rejected) std::rethrow_exception(error_);
     return value_; 
   }
 

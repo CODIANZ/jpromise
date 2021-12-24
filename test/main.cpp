@@ -393,6 +393,35 @@ void test_11() {
   }
 }
 
+
+void test_12() {
+  auto state_to_string = [](PromiseState state) {
+    switch(state){
+      case PromiseState::pending:   return "pending";
+      case PromiseState::fulfilled: return "fulfilled";
+      case PromiseState::rejected:  return "rejected";
+    }
+  };
+
+  {
+    auto p1 = pvalue<std::string>("#1", 100);
+    auto p2 = pvalue<std::string>("#2", 600);
+    auto p3 = pvalue<std::string>("#3", 300);
+
+    for(int i = 0; i < 10; i++){
+      auto x =  Promise<>::states(p1, p2, p3)
+      ->wait();
+      for(auto it = x.begin(); it != x.end(); it++){
+        log() << state_to_string(*it) << ", ";
+      }
+      std::cout << std::endl;
+
+      log() << "wait 100 ms" << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
+}
+
 int main()
 {
   log() << "================ test_1 ================" << std::endl;
@@ -427,4 +456,7 @@ int main()
 
   log() << "================ test_11 ================" << std::endl;
   test_11();
+
+  log() << "================ test_12 ================" << std::endl;
+  test_12();
 }
